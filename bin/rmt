@@ -1,0 +1,115 @@
+#!/usr/bin/env bash
+
+set -e
+
+# Environment variables
+
+# * RMT_CACHE_ENV - if set, the environment of a single interactive shell is
+# cached on the remote system and reused (keyed by the value of the variable).
+CACHE_SHELL_ENV=${RMT_CACHE_ENV:-}
+
+
+# The directory on the remote machine to use as the cache.
+# Note that it's difficult to support `XDG_CACHE_HOME` since that might be set
+# as part of the interactive shell. In that case we'd need to run an
+# interactive shell to get it, but the whole point of caching is to avoid
+# running such a shell.
+RMTCACHE="~/.cache/rmt"
+RMTCACHE_ENVFILE="$RMTCACHE/env/$CACHE_SHELL_ENV"
+
+# Get the local mount and determine the host and remote directory.
+#
+# Sets $HOST and $REMOTE_DIR.
+function get_local_mount {
+    local RESULT=($(findmnt -T . -n -o TARGET,SOURCE,FSTYPE))
+    local TARGET=${RESULT[0]}
+    local SOURCE=${RESULT[1]}
+    local FSTYPE=${RESULT[2]}
+
+    case "$FSTYPE" in
+        nfs*|*sshfs)
+            local PARTS=(${SOURCE//:/ })
+            HOST=${PARTS[0]}
+            REMOTE_DIR="${PARTS[1]}/${PWD#"$TARGET"}"
+            ;;
+        *)
+            echo "Not a recognized remote mount type: $FSTYPE"
+            exit 1
+    esac
+}
+
+# Determine the command to run.
+#
+# Sets $COMMAND.
+function build_command {
+    local BIN=$(basename "$0")
+
+    if [ "$BIN" = "rmt" ]; then
+        # Invoke a login shell if no arguments are given (analogous to what ssh does without a command).
+        if [ $# -eq 0 ]; then
+            COMMAND="exec \$SHELL -l"
+        elif [ "$1" = "--recache" ]; then
+            if [ -z "$CACHE_SHELL_ENV" ]; then
+                echo "No RMT_CACHE_ENV environment variable set"
+                exit 1
+            fi
+            COMMAND="rm $RMTCACHE_ENVFILE"
+        else
+            COMMAND="${*@Q}"
+        fi
+    else
+        # If the script is invoked with a different name than `rmt`, invoke that
+        # command with all arguments.
+        COMMAND="$BIN ${*@Q}"
+    fi
+}
+
+# Determine ssh and remote shell arguments to use based on tty.
+#
+# Sets $SSHARGS, $SH, and $SHELLARGS.
+function copy_tty_environment {
+    if [ -t 1 ]; then
+        SSHARGS="-t"
+        SHELLARGS="-i"
+    else
+        # ssh might allocate a TTY anyway if we don't specify this. This typically
+        # won't matter, except e.g. shells using `printf` might see carriage
+        # returns showing up in variables captured from output since the pseudo TTY
+        # will have `stty nolcr` by default.
+        SSHARGS="-T"
+        SHELLARGS=
+    fi
+    if [ ! -z "$CACHE_SHELL_ENV" ]; then
+        # No reason not to use a posix shell, it'll likely be the fastest
+        # option.
+        SH="/bin/sh"
+        # Export all variables to easily export the stored environment.
+        SHELLARGS="-a"
+    else
+        SH="\$SHELL"
+    fi
+}
+
+# Determine the remote shell and commands to use.
+#
+# Uses $REMOTE_DIR and $COMMAND.
+#
+# Sets $COMMANDS.
+function build_remote_commands {
+    if [ ! -z "$CACHE_SHELL_ENV" ]; then
+        # Use /bin/sh to ensure the output can be consumed by /bin/sh later.
+        local WRITEENV="/bin/sh -c \"mkdir -p $(dirname $RMTCACHE_ENVFILE); export -p > $RMTCACHE_ENVFILE\""
+        # Change directory before dealing with the env in case changing the
+        # directory will affect the stored env (e.g., shell hooks).
+        COMMANDS="cd $REMOTE_DIR; [ -e $RMTCACHE_ENVFILE ] || \$SHELL -ic ${WRITEENV@Q}; . $RMTCACHE_ENVFILE; $COMMAND"
+    else
+        COMMANDS="cd $REMOTE_DIR; $COMMAND"
+    fi
+}
+
+get_local_mount
+build_command "$@"
+copy_tty_environment
+build_remote_commands
+
+exec ssh -q $SSHARGS "$HOST" "$SH $SHELLARGS -c ${COMMANDS@Q}"
