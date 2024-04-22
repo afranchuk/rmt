@@ -8,7 +8,81 @@ set -e
 # cached on the remote system and reused (keyed by the value of the variable).
 CACHE_SHELL_ENV=${RMT_CACHE_ENV:-}
 
+# * RMT_SINGLE_SESSION - *EXPERIMENTAL* run a single remote shell session. This
+# requires the remote system to have `screen` and `fuser` (from `psmisc`)
+# installed. You must also run `rmt --init-single-session` once.
+SINGLE_SESSION=${RMT_SINGLE_SESSION:-}
 
+# Starts a screen daemon if necessary and then runs all arguments in it,
+# proxying stdin/stdout/stderr/return and signals.
+function rmtscreen {
+    local SCREEN_NAME=rmt
+
+    if ! screen -list | grep $SCREEN_NAME >/dev/null ; then
+        screen -s -$SHELL -dmS $SCREEN_NAME
+    fi
+
+    # Create I/O pipes
+    local DIR=$( mktemp -d )
+    mkfifo $DIR/stdin $DIR/stdout $DIR/stderr
+    echo 123 > $DIR/status
+    trap 'rm -f $DIR/{stdin,stdout,stderr,status}; rmdir $DIR' RETURN
+
+    # Forward ^C to screen
+    trap "screen -S $SCREEN_NAME -p0 -X stuff $'\003'" INT
+
+    # Print output and kill stdin when both pipes are closed
+    {
+        cat $DIR/stderr >&2 &
+        cat $DIR/stdout &
+        wait
+        [[ -e $DIR/stdin ]] && fuser -s -PIPE -k -w $DIR/stdin
+    } &
+    READER_PID=$!
+
+    # Close all the pipes if the command fails to start (e.g. syntax error)
+    {
+        # Kill the sleep when this subshell is killed. Ugh.. bash.
+        trap 'kill $(jobs -p)' EXIT
+
+        # Try to write nothing to stdin. This will block until something reads.
+        echo -n > $DIR/stdin &
+        TEST_PID=$!
+        sleep 2.0
+
+        # If the write failed and we're not killed, it probably didn't start
+        if [[ -e $DIR/stdin ]] && kill $TEST_PID 2>/dev/null; then
+            echo 'xscreen timeout' >&2
+            wait $TEST_PID 2>/dev/null
+
+            # Send ^C to clear any half-written command (e.g. no closing braces)
+            screen -S $SCREEN_NAME -p0 -X stuff $'\003'
+
+            # Write nothing to output, triggers SIGPIPE
+            echo -n 1> $DIR/stdout 2> $DIR/stderr
+
+            # Stop stdin by creating a fake reader and sending SIGPIPE
+            cat $DIR/stdin >/dev/null &
+            fuser -s -PIPE -k -w $DIR/stdin
+        fi
+    } &
+    CHECKER_PID=$!
+
+    # Start the command (Clear line ^A^K, enter command with redirects, run with ^O)
+    local BASHCMD="{ ${*@Q} ; echo \$? > $DIR/status ; } <$DIR/stdin 1> >(tee $DIR/stdout) 2> >(tee $DIR/stderr >&2)"
+    screen -S $SCREEN_NAME -p0 -X stuff "$(echo -ne '\001\013')bash -c ${BASHCMD@Q}$(echo -ne '\015')"
+
+    # Forward stdin
+    cat > $DIR/stdin
+    kill $CHECKER_PID 2>/dev/null && wait $CHECKER_PID 2>/dev/null
+
+    # Just in case stdin is closed early, wait for output to finish
+    wait $READER_PID 2>/dev/null
+
+    trap - INT
+
+    return $(cat $DIR/status)
+}
 # The directory on the remote machine to use as the cache.
 RMTCACHE="\${XDG_CACHE_HOME:-~/.cache}/rmt"
 RMTCACHE_ENVFILE="$RMTCACHE/env/$CACHE_SHELL_ENV"
@@ -44,6 +118,14 @@ function build_command {
         # Invoke a login shell if no arguments are given (analogous to what ssh does without a command).
         if [ $# -eq 0 ]; then
             COMMAND="exec \$SHELL -l"
+        elif [ "$1" = "--init-single-session" ]; then
+            # Set up rmtscreen
+            local SOURCE="#!/bin/bash -e
+$(typeset -f rmtscreen)
+rmtscreen \"\$@\"
+"
+            COMMAND="echo -en ${SOURCE@Q} > ~/.local/bin/rmtscreen; chmod +x ~/.local/bin/rmtscreen"
+            SINGLE_SESSION=
         elif [ "$1" = "--recache" ]; then
             if [ -z "$CACHE_SHELL_ENV" ]; then
                 echo "No RMT_CACHE_ENV environment variable set"
@@ -64,7 +146,7 @@ function build_command {
 #
 # Sets $SSHARGS, $SH, and $SHELLARGS.
 function copy_tty_environment {
-    if [ -t 1 ]; then
+    if [ -t 1 -a -z "$SINGLE_SESSION" ]; then
         SSHARGS="-t"
         SHELLARGS="-i"
     else
@@ -98,6 +180,8 @@ function build_remote_commands {
         # Change directory before dealing with the env in case changing the
         # directory will affect the stored env (e.g., shell hooks).
         COMMANDS="cd $REMOTE_DIR; [ -e $RMTCACHE_ENVFILE ] || \$SHELL -ic ${WRITEENV@Q}; . $RMTCACHE_ENVFILE; $COMMAND"
+    elif [ ! -z "$SINGLE_SESSION" ]; then
+        COMMANDS="~/.local/bin/rmtscreen cd $REMOTE_DIR; ~/.local/bin/rmtscreen $COMMAND"
     else
         COMMANDS="cd $REMOTE_DIR; $COMMAND"
     fi
