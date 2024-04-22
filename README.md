@@ -30,7 +30,8 @@ may be possible).
 
 After ensuring you have the above requirements, simply add the `bin` directory to your `PATH` (or,
 if you prefer, copy `rmt` to a directory on your `PATH`). You must also set up ssh login to the
-remote machines which are mounted.
+remote machines which are mounted. Make sure that `rmt` is executable! It should be if cloned from
+git or downloaded in a tarball.
 
 ## Usage
 
