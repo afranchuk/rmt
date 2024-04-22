@@ -43,7 +43,7 @@ Similar to `ssh`,
 
 You can also symlink to `rmt`. If you do this (and place the files in a directory on your `PATH`),
 `rmt` will use the name of the symlink as the remote command to run, and remaining arguments as the
-arguments to the command. This works especially will with tools like [`direnv`][], since you can add
+arguments to the command. This works especially well with tools like [`direnv`][], since you can add
 a directory with many symlinked commands to the `PATH` when in the mounted filesystem.
 
 If you define a `RMT_CACHE_ENV` environment variable, `rmt` will cache the environment of a single
