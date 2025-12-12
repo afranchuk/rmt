@@ -8,6 +8,10 @@ set -e
 # cached on the remote system and reused (keyed by the value of the variable).
 CACHE_SHELL_ENV=${RMT_CACHE_ENV:-}
 
+# * RMT_FORWARD_ENV - if set, this lists environment variables to be forwarded
+# to the remote command
+FORWARD_ENV=${RMT_FORWARD_ENV:-}
+
 
 # The directory on the remote machine to use as the cache.
 # Note that it's difficult to support `XDG_CACHE_HOME` since that might be set
@@ -92,18 +96,25 @@ function copy_tty_environment {
 
 # Determine the remote shell and commands to use.
 #
-# Uses $REMOTE_DIR and $COMMAND.
+# Uses $REMOTE_DIR, $COMMAND, and $FORWARD_ENV.
 #
 # Sets $COMMANDS.
 function build_remote_commands {
+    ENV_VARS=
+    if [ ! -z "$FORWARD_ENV" ]; then
+        for name in "$FORWARD_ENV"; do
+            ENV_VARS="$ENV_VARS $name=${!name@Q}"
+        done
+    fi
+
     if [ ! -z "$CACHE_SHELL_ENV" ]; then
         # Use /bin/sh to ensure the output can be consumed by /bin/sh later.
         local WRITEENV="/bin/sh -c \"mkdir -p $(dirname $RMTCACHE_ENVFILE); export -p > $RMTCACHE_ENVFILE\""
         # Change directory before dealing with the env in case changing the
         # directory will affect the stored env (e.g., shell hooks).
-        COMMANDS="cd $REMOTE_DIR; [ -e $RMTCACHE_ENVFILE ] || \$SHELL -ic ${WRITEENV@Q}; . $RMTCACHE_ENVFILE; $COMMAND"
+        COMMANDS="cd $REMOTE_DIR; [ -e $RMTCACHE_ENVFILE ] || \$SHELL -ic ${WRITEENV@Q}; . $RMTCACHE_ENVFILE; $ENV_VARS $COMMAND"
     else
-        COMMANDS="cd $REMOTE_DIR; $COMMAND"
+        COMMANDS="cd $REMOTE_DIR; $ENV_VARS $COMMAND"
     fi
 }
 
