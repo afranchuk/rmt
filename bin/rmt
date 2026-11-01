@@ -72,7 +72,7 @@ function build_command {
 #
 # Sets $SSHARGS, $SH, and $SHELLARGS.
 function copy_tty_environment {
-    if [ -t 1 ]; then
+    if [ -t 0 ] && [ -t 1 ]; then
         SSHARGS="-t"
         SHELLARGS="-i"
     else
