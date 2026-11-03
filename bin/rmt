@@ -18,21 +18,23 @@ FORWARD_ENV=${RMT_FORWARD_ENV:-}
 # as part of the interactive shell. In that case we'd need to run an
 # interactive shell to get it, but the whole point of caching is to avoid
 # running such a shell.
-RMTCACHE="~/.cache/rmt"
+RMTCACHE="\$HOME/.cache/rmt"
 RMTCACHE_ENVFILE="$RMTCACHE/env/$CACHE_SHELL_ENV"
 
 # Get the local mount and determine the host and remote directory.
 #
 # Sets $HOST and $REMOTE_DIR.
 function get_local_mount {
-    local RESULT=($(findmnt -T . -n -o TARGET,SOURCE,FSTYPE))
-    local TARGET=${RESULT[0]}
-    local SOURCE=${RESULT[1]}
-    local FSTYPE=${RESULT[2]}
+    local RESULT TARGET SOURCE FSTYPE
+    mapfile -t -d " " RESULT < <(findmnt -T . -n -o TARGET,SOURCE,FSTYPE | tr -d '\n')
+    TARGET=${RESULT[0]}
+    SOURCE=${RESULT[1]}
+    FSTYPE=${RESULT[2]}
 
     case "$FSTYPE" in
         nfs*|*sshfs)
-            local PARTS=(${SOURCE//:/ })
+            local PARTS
+            mapfile -t -d " " PARTS <<< "${SOURCE//:/ }"
             HOST=${PARTS[0]}
             REMOTE_DIR="${PARTS[1]}/${PWD#"$TARGET"}"
             ;;
@@ -46,7 +48,8 @@ function get_local_mount {
 #
 # Sets $COMMAND.
 function build_command {
-    local BIN=$(basename "$0")
+    local BIN
+    BIN=$(basename "$0")
 
     if [ "$BIN" = "rmt" ]; then
         # Invoke a login shell if no arguments are given (analogous to what ssh does without a command).
@@ -83,7 +86,7 @@ function copy_tty_environment {
         SSHARGS="-T"
         SHELLARGS=
     fi
-    if [ ! -z "$CACHE_SHELL_ENV" ]; then
+    if [ -n "$CACHE_SHELL_ENV" ]; then
         # No reason not to use a posix shell, it'll likely be the fastest
         # option.
         SH="/bin/sh"
@@ -101,15 +104,16 @@ function copy_tty_environment {
 # Sets $COMMANDS.
 function build_remote_commands {
     ENV_VARS=
-    if [ ! -z "$FORWARD_ENV" ]; then
-        for name in "$FORWARD_ENV"; do
+    if [ -n "$FORWARD_ENV" ]; then
+        for name in $FORWARD_ENV; do
             ENV_VARS="$ENV_VARS $name=${!name@Q}"
         done
     fi
 
-    if [ ! -z "$CACHE_SHELL_ENV" ]; then
+    if [ -n "$CACHE_SHELL_ENV" ]; then
         # Use /bin/sh to ensure the output can be consumed by /bin/sh later.
-        local WRITEENV="/bin/sh -c \"mkdir -p $(dirname $RMTCACHE_ENVFILE); export -p > $RMTCACHE_ENVFILE\""
+        local WRITEENV
+        WRITEENV="/bin/sh -c \"mkdir -p $(dirname "$RMTCACHE_ENVFILE"); export -p > $RMTCACHE_ENVFILE\""
         # Change directory before dealing with the env in case changing the
         # directory will affect the stored env (e.g., shell hooks).
         COMMANDS="cd $REMOTE_DIR; [ -e $RMTCACHE_ENVFILE ] || \$SHELL -ic ${WRITEENV@Q}; . $RMTCACHE_ENVFILE; $ENV_VARS $COMMAND"
