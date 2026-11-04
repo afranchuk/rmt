@@ -26,7 +26,7 @@ RMTCACHE_ENVFILE="$RMTCACHE/env/$CACHE_SHELL_ENV"
 # Sets $HOST and $REMOTE_DIR.
 function get_local_mount {
     local RESULT TARGET SOURCE FSTYPE
-    mapfile -t -d " " RESULT < <(findmnt -T . -n -o TARGET,SOURCE,FSTYPE | tr -d '\n')
+    read -r -a RESULT < <(findmnt -T . -n -o TARGET,SOURCE,FSTYPE)
     TARGET=${RESULT[0]}
     SOURCE=${RESULT[1]}
     FSTYPE=${RESULT[2]}
@@ -34,7 +34,7 @@ function get_local_mount {
     case "$FSTYPE" in
         nfs*|*sshfs)
             local PARTS
-            mapfile -t -d " " PARTS <<< "${SOURCE//:/ }"
+            IFS=' ' read -r -a PARTS <<< "${SOURCE//:/ }"
             HOST=${PARTS[0]}
             REMOTE_DIR="${PARTS[1]}/${PWD#"$TARGET"}"
             ;;
@@ -106,19 +106,19 @@ function build_remote_commands {
     ENV_VARS=
     if [ -n "$FORWARD_ENV" ]; then
         for name in $FORWARD_ENV; do
-            ENV_VARS="$ENV_VARS $name=${!name@Q}"
+            ENV_VARS+="${ENV_VARS:+ }$name=${!name@Q}"
         done
     fi
 
     if [ -n "$CACHE_SHELL_ENV" ]; then
         # Use /bin/sh to ensure the output can be consumed by /bin/sh later.
         local WRITEENV
-        WRITEENV="/bin/sh -c \"mkdir -p $(dirname "$RMTCACHE_ENVFILE"); export -p > $RMTCACHE_ENVFILE\""
+        WRITEENV="/bin/sh -c \"mkdir -p $(dirname "$RMTCACHE_ENVFILE") && export -p > $RMTCACHE_ENVFILE\""
         # Change directory before dealing with the env in case changing the
         # directory will affect the stored env (e.g., shell hooks).
-        COMMANDS="cd $REMOTE_DIR; [ -e $RMTCACHE_ENVFILE ] || \$SHELL -ic ${WRITEENV@Q}; . $RMTCACHE_ENVFILE; $ENV_VARS $COMMAND"
+        COMMANDS="cd $REMOTE_DIR && [ -e $RMTCACHE_ENVFILE ] || \$SHELL -ic ${WRITEENV@Q} && . $RMTCACHE_ENVFILE && $ENV_VARS $COMMAND"
     else
-        COMMANDS="cd $REMOTE_DIR; $ENV_VARS $COMMAND"
+        COMMANDS="cd $REMOTE_DIR && $ENV_VARS $COMMAND"
     fi
 }
 
