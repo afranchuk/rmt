@@ -122,6 +122,30 @@ function build_remote_commands {
     fi
 }
 
+# Show help immediately (before any mount-dependent checks).
+if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
+    cat <<'EOF'
+rmt - run commands on the remote end of a network-mounted filesystem
+
+Usage:
+  rmt [command ...]          Run `command` on the remote machine.
+  (no arguments)             start an interactive ssh shell on the remote host
+
+Environment:
+  RMT_CACHE_ENV=KEY          Cache remote interactive shell env (keyed by KEY).
+  RMT_FORWARD_ENV=VARS       Space-separated vars to forward, e.g.
+                             RMT_FORWARD_ENV='FOO PATH'
+
+Examples:
+  rmt pwd                    # Run `pwd` on remote
+  rmt --recache              # Clear cached env (requires RMT_CACHE_ENV)
+  rmt --help                 # Show this help
+
+Repository: https://github.com/afranchuk/rmt
+EOF
+    exit 0
+fi
+
 get_local_mount
 build_command "$@"
 copy_tty_environment
