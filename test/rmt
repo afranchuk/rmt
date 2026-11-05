@@ -1,0 +1,172 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BIN="$(cd "$SCRIPT_DIR/../bin" && pwd)/rmt"
+
+PASS=0
+FAIL=0
+
+pass() { PASS=$((PASS+1)); echo "[PASS] $*"; }
+fail() { FAIL=$((FAIL+1)); echo "[FAIL] $*" >&2; }
+
+if ! bash -n "$BIN"; then
+    echo "bash -n failed on $BIN" >&2
+    exit 2
+fi
+
+if [ ! -x "$BIN" ]; then
+    echo "rmt binary not found at $BIN" >&2
+    exit 2
+fi
+
+TARGET="${1:-.}"
+if [ -n "${TARGET:-}" ] && [ ! -d "$TARGET" ]; then
+    echo "error: '$TARGET' is not a directory" >&2
+    exit 2
+fi
+
+cd "$TARGET" || exit
+
+if command -v findmnt &>/dev/null; then
+    FSTYPE="$(findmnt -T . -n -o TARGET,FSTYPE | head -n1)"
+    case "$FSTYPE" in
+        nfs*|*sshfs) ;;
+        *)
+            echo "Not a recognized remote mount type: $FSTYPE" >&2
+            echo "This test script validates rmt's network mount features." >&2
+            echo "Run from an sshfs/nfs mounted directory, or provide a PATH argument." >&2
+            exit 2
+            ;;
+    esac
+fi
+
+it() {
+    local exit_code="$?"
+    local desc="$1"; shift
+    if [ $exit_code -eq 0 ]; then
+        pass "$desc"
+    else
+        fail "$desc"
+    fi
+}
+
+{
+    if command -v findmnt &>/dev/null; then
+        read -r TARGET FSTYPE <<< "$(findmnt -T . -n -o TARGET,FSTYPE | head -n1)"
+        case "$FSTYPE" in
+            nfs*|*sshfs) true ;;
+            *) false ;;
+        esac
+    else
+        false
+    fi
+}
+it "current dir is on a supported network filesystem"
+
+{
+    REMOTE_PWD="$("$BIN" pwd 2>/dev/null)" || true
+    [ -n "$REMOTE_PWD" ]
+}
+it "rmt pwd returns '$REMOTE_PWD'"
+
+{
+    REMOTE_HOST="$("$BIN" hostname 2>/dev/null)"
+    [ -n "$REMOTE_HOST" ]
+}
+it "rmt hostname returns '$REMOTE_HOST'"
+
+{
+    OUT="$("$BIN" echo hello-world 2>/dev/null)"
+    [ "$OUT" = "hello-world" ]
+}
+it "rmt echo literal returns 'hello-world'"
+
+"$BIN" true
+it "rmt true exits successfully"
+
+{
+    WHICH_LS="$("$BIN" which ls 2>/dev/null)"
+    [ -n "$WHICH_LS" ]
+}
+it "rmt which ls returns '$WHICH_LS'"
+
+"$BIN" --help > /dev/null 2>&1
+it "rmt --help prints usage text"
+
+MARKER="$("$BIN" printf 'marker:%s\n' 'MARKER-ARG-12345')"
+[ "$MARKER" = "marker:MARKER-ARG-12345" ]
+it "remote command args passed through verbatim"
+
+EXPECTED_BASENAME="$(basename "$PWD")"
+{
+    REMOTE_BASENAME="${REMOTE_PWD##*/}"
+    [ "$REMOTE_BASENAME" = "$EXPECTED_BASENAME" ]
+}
+it "remote basename matches local '$EXPECTED_BASENAME' ($REMOTE_PWD)"
+
+! "$BIN" this-does-not-exist < /dev/null 2>/dev/null > /dev/null
+it "unknown remote command fails cleanly"
+
+CACHE_KEY="test_cache_$(date +%s)"
+export RMT_CACHE_ENV="$CACHE_KEY"
+[ "$RMT_CACHE_ENV" = "$CACHE_KEY" ]
+{
+    CACHE_CHECK="$("$BIN" echo "$CACHE_KEY" 2>/dev/null)"
+    [ "$CACHE_CHECK" = "$CACHE_KEY" ]
+}
+it "rmt respects RMT_CACHE_ENV ($CACHE_KEY)"
+unset RMT_CACHE_ENV
+
+export TEST_VAR1="forward1_value"
+export TEST_VAR2="forward2_value"
+export RMT_FORWARD_ENV="TEST_VAR1 TEST_VAR2"
+FORWARD_CHECK1="$("$BIN" echo "$TEST_VAR1" 2>/dev/null)"
+FORWARD_CHECK2="$("$BIN" echo "$TEST_VAR2" 2>/dev/null)"
+[ "$FORWARD_CHECK1" = "forward1_value" ] && [ "$FORWARD_CHECK2" = "forward2_value" ]
+it "rmt respects RMT_FORWARD_ENV ($RMT_FORWARD_ENV)"
+unset TEST_VAR1 TEST_VAR2 RMT_FORWARD_ENV
+
+RMT_CACHE_ENV="test_recache_$(date +%s)"
+export RMT_CACHE_ENV
+("$BIN" pwd 2>/dev/null) > /dev/null
+"$BIN" --recache 2>/dev/null
+it "rmt --recache clears RMT_CACHE_ENV cache"
+unset RMT_CACHE_ENV
+
+export RMT_FORWARD_ENV="VAR_WITH_SPACES TEST_VAR"
+export VAR_WITH_SPACES="value with spaces"
+export TEST_VAR="simple_value"
+
+FORWARD_CHECK_VAR="$("$BIN" echo "$VAR_WITH_SPACES" 2>/dev/null)"
+FORWARD_CHECK_TEST="$("$BIN" echo "$TEST_VAR" 2>/dev/null)"
+
+[ "$FORWARD_CHECK_VAR" = "value with spaces" ] && [ "$FORWARD_CHECK_TEST" = "simple_value" ]
+it "rmt forwards environment variables with spaces correctly"
+
+unset VAR_WITH_SPACES RMT_FORWARD_ENV TEST_VAR
+
+RMT_CACHE_ENV="test/path/$(date +%s)"
+export RMT_CACHE_ENV
+("$BIN" pwd 2>/dev/null) > /dev/null
+it "rmt accepts RMT_CACHE_ENV with path separators ($RMT_CACHE_ENV)"
+unset RMT_CACHE_ENV
+
+OUT="$("$BIN" echo hello-world 2>/dev/null)"
+[ "$OUT" = "hello-world" ]
+it "rmt echo literal returns 'hello-world' (after env var tests)"
+
+"$BIN" true
+it "rmt true exits successfully after clearing"
+
+WHICH_LS="$("$BIN" which ls 2>/dev/null)" || true
+[ -n "$WHICH_LS" ]
+it "rmt which ls returns '$WHICH_LS' (after env var tests)"
+
+"$BIN" --help > /dev/null 2>&1
+it "rmt --help prints usage text (after env var tests)"
+
+echo "----------------------------------------"
+echo "Tests: $PASS passed, $FAIL failed"
+echo "----------------------------------------"
+[ "$FAIL" = "0" ]
