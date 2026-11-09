@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+PASS=0
+FAIL=0
+
+pass() { PASS=$((PASS+1)); echo "[PASS] $*"; }
+fail() { FAIL=$((FAIL+1)); echo "[FAIL] $*" >&2; }
+
+it() {
+    local exit_code="$?"
+    local desc="$1"; shift
+    if [ $exit_code -eq 0 ]; then
+        pass "$desc"
+    else
+        fail "$desc"
+    fi
+}
+
+error() {
+    echo "error: $*" >&2
+    exit 2
+}
+
+if ! which rmt &> /dev/null; then
+    error "error: rmt executable not on path"
+fi
+
+if [ -f ./bin/rmt ]; then
+    shellcheck ./bin/rmt
+    it "rmt passes shellcheck"
+fi
+
+if [ -f ./test/rmt ]; then
+    shellcheck ./test/rmt
+    it "rmt tests pass shellcheck"
+fi
+
+TARGET="${1:-.}"
+if [ -n "${TARGET:-}" ] && [ ! -d "$TARGET" ]; then
+    error "'$TARGET' is not a directory" >&2
+fi
+
+cd "$TARGET" || exit
+
+if command -v findmnt &>/dev/null; then
+    FSTYPE="$(findmnt -T . -n -o TARGET,FSTYPE | head -n1)"
+    case "$FSTYPE" in
+        nfs*|*sshfs) ;;
+        *)
+            error "Not a recognized remote mount type: $FSTYPE
+This test script validates rmt's network mount features.
+Run from an sshfs/nfs mounted directory, or provide a PATH argument."
+            ;;
+    esac
+fi
+
+{
+    REMOTE_PWD="$(rmt pwd)" || true
+    [ -n "$REMOTE_PWD" ]
+}
+it "rmt pwd returns '$REMOTE_PWD'"
+
+{
+    REMOTE_HOST="$(rmt hostname)"
+    [ -n "$REMOTE_HOST" ]
+}
+it "rmt hostname returns '$REMOTE_HOST'"
+
+{
+    [ "$(rmt echo hello-world)" = "hello-world" ]
+}
+it "rmt echo literal returns 'hello-world'"
+
+rmt true
+it "rmt true exits zero"
+
+! rmt false
+it "rmt false exits non-zero"
+
+rmt --help
+it "rmt --help prints usage text"
+
+MARKER="$(rmt printf 'marker:%s\n' 'MARKER-ARG-12345')"
+[ "$MARKER" = "marker:MARKER-ARG-12345" ]
+it "remote command args passed through verbatim"
+
+! rmt this-does-not-exist &> /dev/null
+it "unknown remote command fails cleanly"
+
+# shellcheck disable=SC2030
+(
+    export TEST_VAR1="forward1_value"
+    export TEST_VAR2="forward2_value"
+    export RMT_FORWARD_ENV="TEST_VAR1 TEST_VAR2"
+    [ "$(rmt sh -c "echo \$TEST_VAR2")" = "$TEST_VAR1" ]
+    [ "$(rmt sh -c "echo \$TEST_VAR2")" = "$TEST_VAR2" ]
+)
+it "rmt forwards RMT_FORWARD_ENV correctly"
+
+# shellcheck disable=SC2031
+(
+    export RMT_FORWARD_ENV="VAR_WITH_SPACES"
+    export VAR_WITH_SPACES="value with spaces"
+
+    [ "$(rmt bash -c "echo \$VAR_WITH_SPACES")" = "$VAR_WITH_SPACES" ]
+)
+it "rmt forwards environment variables with spaces correctly"
+
+echo "----------------------------------------"
+echo "Tests: $PASS passed, $FAIL failed"
+echo "----------------------------------------"
+[ "$FAIL" = "0" ]
