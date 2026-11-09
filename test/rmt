@@ -98,8 +98,8 @@ it "unknown remote command fails cleanly"
     export TEST_VAR1="forward1_value"
     export TEST_VAR2="forward2_value"
     export RMT_FORWARD_ENV="TEST_VAR1 TEST_VAR2"
-    [ "$(rmt bash -c "echo \$TEST_VAR2")" = "$TEST_VAR1" ]
-    [ "$(rmt bash -c "echo \$TEST_VAR2")" = "$TEST_VAR2" ]
+    [ "$(rmt sh -c "echo \$TEST_VAR2")" = "$TEST_VAR1" ]
+    [ "$(rmt sh -c "echo \$TEST_VAR2")" = "$TEST_VAR2" ]
 )
 it "rmt forwards RMT_FORWARD_ENV correctly"
 
