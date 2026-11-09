@@ -26,23 +26,19 @@ if ! which rmt &> /dev/null; then
     error "error: rmt executable not on path"
 fi
 
-TARGET="${1:-.}"
-if [ -n "${TARGET:-}" ] && [ ! -d "$TARGET" ]; then
-    error "'$TARGET' is not a directory" >&2
-fi
-
 if [ -f ./bin/rmt ]; then
-    (
-        shellcheck ./bin/rmt
-    )
+    shellcheck ./bin/rmt
     it "rmt passes shellcheck"
 fi
 
 if [ -f ./test/rmt ]; then
-    (
-        shellcheck ./test/rmt
-    )
+    shellcheck ./test/rmt
     it "rmt tests pass shellcheck"
+fi
+
+TARGET="${1:-.}"
+if [ -n "${TARGET:-}" ] && [ ! -d "$TARGET" ]; then
+    error "'$TARGET' is not a directory" >&2
 fi
 
 cd "$TARGET" || exit
@@ -72,8 +68,7 @@ it "rmt pwd returns '$REMOTE_PWD'"
 it "rmt hostname returns '$REMOTE_HOST'"
 
 {
-    OUT="$(rmt echo hello-world)"
-    [ "$OUT" = "hello-world" ]
+    [ "$(rmt echo hello-world)" = "hello-world" ]
 }
 it "rmt echo literal returns 'hello-world'"
 
