@@ -127,4 +127,4 @@ build_command "$@"
 copy_tty_environment
 build_remote_commands
 
-exec ssh -q $SSHARGS "$HOST" "$SH $SHELLARGS -c ${COMMANDS@Q}"
+exec ssh -p "${RMT_PORT:-22}" -q $SSHARGS "$HOST" "$SH $SHELLARGS -c ${COMMANDS@Q}"
